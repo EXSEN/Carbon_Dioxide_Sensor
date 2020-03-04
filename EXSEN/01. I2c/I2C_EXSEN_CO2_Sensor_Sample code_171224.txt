@@ -1,0 +1,155 @@
+#include <Wire.h>
+#include <string.h>
+
+
+// HX_105 I2C Device Address
+#define HX_105_ADDR 0x23
+
+// HX_105 I2C Commnad
+const uint8_t ALL_DATA = 0xA1; // 5 Byte -> CO2_H(1byte) CO2_M(1byte) CO2_L(1byte) STATE(1byte)
+const uint8_t CO2_DATA = 0xA2; // 3 Byte -> CO2_H(1byte) CO2_M(1byte) CO2_L(1byte)
+const uint8_t SnE_DATA = 0xA5; // 2 Byte -> STATE(1byte) 
+const uint8_t CALI_DATA = 0x90;
+const uint8_t I2C_CMD_LEDO = 0xF5;
+
+// HX_105N I2C Data processing
+uint8_t i2c_rx_buf[32];
+uint8_t i2c_rx_buf_cnt = 0;
+uint8_t i2c_tx_buf[32];
+uint8_t i2c_tx_buf_cnt = 0;
+
+char Rx_Byte = 0;
+char Rx_Buf[20];
+byte Rx_Buf_Cnt = 0;
+byte Rx_State = 0;
+char data_buf[10];
+
+uint32_t co2_ppm = 0;
+uint8_t co2_state = 0; // 0 : Normal 1: Warm Up
+uint8_t co2_error = 0; // 0 : Noraml 1: Co2 Sensor Error
+uint8_t cali_status = 0;
+uint8_t co2_ledo = 0;
+
+uint8_t i = 0;
+String str;
+
+unsigned long prev_time=0;          // 현재시간 및 기준 시간 설정용
+unsigned long current_time = 0;     // 초기 안정화 시간 카운터
+
+void setup()
+{
+  Wire.begin();           // join i2c bus
+  Wire.setClock(200000);  // set i2c bus clock
+  Serial.begin(9600);    // start serial for output
+  
+  i2c_tx_buf_cnt = sprintf((char*)i2c_tx_buf,"0"); // LED 끄기
+  HX_105_Write(I2C_CMD_LEDO,i2c_tx_buf,i2c_tx_buf_cnt);
+  delay(10);
+  
+}
+
+void loop()
+{
+   current_time = millis()/1000;
+     
+   if(current_time - prev_time >=1)
+   {
+      HX_105_Read(ALL_DATA,5);
+      HX_105_Read(CO2_DATA,3);
+      HX_105_Read(SnE_DATA,2);
+      HX_105_Read(I2C_CMD_LEDO,2);
+      prev_time = current_time; 
+      }
+   else{
+   //do nothing
+   }
+}
+
+void HX_105_Write(const uint8_t command, uint8_t* buf, int len)
+{
+  unsigned char i;
+  Wire.beginTransmission(HX_105_ADDR);    // transmit to HX_105 device address
+  Wire.write(command);                    // sends command
+  for( i = 0 ; i < len; i++)
+  {
+    Wire.write(buf[i]);                    // sends command
+  }
+  Wire.endTransmission();                 // stop transmitting
+}
+
+void HX_105_Read(const uint8_t command, int len)
+{
+  Wire.beginTransmission(HX_105_ADDR);    // transmit to HX_105 device address
+  Wire.write(command);                    // sends command
+  Wire.endTransmission();                 // stop transmitting
+  Wire.requestFrom(HX_105_ADDR,len);      // request data from HX_105
+    
+  while (Wire.available())      // slave may send less than requested
+  { 
+    char c = Wire.read();       // receive a byte as character
+    i2c_rx_buf[i2c_rx_buf_cnt++] = (int8_t)c;
+  }
+  if(i2c_rx_buf_cnt == len)
+  {
+    if(command == ALL_DATA)
+    {
+        co2_ppm = ((uint32_t)(i2c_rx_buf[1] << 8)) | ((uint32_t)i2c_rx_buf[2]);
+        co2_state = i2c_rx_buf[3];
+             
+    }
+    else if(command == CO2_DATA)
+    {
+        co2_ppm = ((uint32_t)(i2c_rx_buf[1] << 8)) | ((uint32_t)i2c_rx_buf[2]);
+        
+       Serial.println("# " + String(co2_ppm,DEC)); // print the character
+    }
+    else if(command == SnE_DATA)
+    {
+        co2_state = i2c_rx_buf[0];
+        
+    }
+    else if(command == CALI_DATA)
+    {
+        cali_status = i2c_rx_buf[0];
+
+    }
+    else if(command == I2C_CMD_LEDO)
+    {
+      str = (char*)i2c_rx_buf;
+      co2_ledo = str.toInt();
+      Serial.println("LEDO " + String(co2_ledo,DEC));
+    }
+    memset(i2c_rx_buf,0,10);
+    i2c_rx_buf_cnt = 0;
+  }
+}
+
+
+void mcal(int mcal_action)                            //수동 CAL
+{
+  if(mcal_action == 0){
+    i2c_tx_buf[0] = 0;
+    i2c_tx_buf_cnt = 1;
+    HX_105_Write(CALI_DATA,i2c_tx_buf,i2c_tx_buf_cnt); // Auto Cal Mode Set
+    HX_105_Read(CALI_DATA,1); // Cal Status Read
+    delay(10);
+  
+    i2c_tx_buf[0] = 1;
+    i2c_tx_buf_cnt = 1;
+    HX_105_Write(CALI_DATA,i2c_tx_buf,i2c_tx_buf_cnt); // Manual Cal Mode Set
+    HX_105_Read(CALI_DATA,1); // Cal Status Read
+    delay(10);
+
+    i2c_tx_buf[0] = 10;
+    i2c_tx_buf_cnt = 1;
+    HX_105_Write(CALI_DATA,i2c_tx_buf,i2c_tx_buf_cnt); // Manual Cal Action
+    HX_105_Read(CALI_DATA,1); // Cal Status Read
+    delay(10);
+  
+    i2c_tx_buf[0] = 0;
+    i2c_tx_buf_cnt = 1;
+    HX_105_Write(CALI_DATA,i2c_tx_buf,i2c_tx_buf_cnt); // Auto Cal Mode Set
+    HX_105_Read(CALI_DATA,1); // Cal Status Read
+    delay(10);
+  }
+}
